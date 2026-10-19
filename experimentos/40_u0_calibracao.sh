@@ -29,11 +29,11 @@ for REP in $(seq 1 "$REPS"); do
       if [ "$PLANO" = srv6 ]; then echo "via r1"; else echo "srv6off"; fi
       for T in $TAXAS; do
         TAG_RUN="${PLANO}_${T}"
-        echo "r1 tcpdump -i r1-eth1 -w $R/${TAG_RUN}.pcap -c 100000 > /dev/null 2>&1 &"
+        echo "r1 tcpdump -i r1-eth1 -s 128 -w $R/${TAG_RUN}.pcap -c 100000 > /dev/null 2>&1 &"
         echo "sh sleep 1"
         echo "sh echo \"\$(date +%s.%N) INI_${TAG_RUN}\" >> $MARC"
         echo "fluxo $DUR $R/iperf_cli_${TAG_RUN}.json $T $R/iperf_srv_${TAG_RUN}.json"
-        echo "sh sleep $((DUR + 3))"
+        echo "sh sleep $((DUR + 9))"      # o iperf3 chega a levar ~5 s a mais que -t na VM de 2 vCPU
         echo "sh echo \"\$(date +%s.%N) FIM_${TAG_RUN}\" >> $MARC"
         echo "r1 pkill tcpdump"
         echo "sh sleep 2"
