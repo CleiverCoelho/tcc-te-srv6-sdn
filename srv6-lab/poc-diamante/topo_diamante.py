@@ -177,7 +177,12 @@ def configura_rede(net):
         no.cmd("sysctl -w net.ipv6.conf.all.accept_redirects=0")
         _prepara_interface(no, iface)
         no.cmd("ip -6 addr add %s/64 dev %s" % (addr, iface))
-    h2.cmd("ip -6 addr add %s/64 dev h2-eth0" % H2_FUNDO_IP)
+    # preferred_lft 0 = endereço "deprecated": responde a quem o endereça, mas o
+    # kernel NÃO o escolhe como origem. Sem isso, um servidor UDP em wildcard
+    # (iperf3 -s do fluxo TE) respondia ao h1 com origem b::100 em vez de b::1; o
+    # socket UDP do cliente, conectado a b::1, descartava a resposta e o
+    # handshake do iperf3 nunca completava (achado do diagnóstico, 18/10).
+    h2.cmd("ip -6 addr add %s/64 dev h2-eth0 valid_lft forever preferred_lft 0" % H2_FUNDO_IP)
 
     # h1 precisa saber alcançar CADA locator, para que o NDP resolva o endereço
     # REAL do roteador. O SID em si nunca é perguntado ao NDP — ninguém o
