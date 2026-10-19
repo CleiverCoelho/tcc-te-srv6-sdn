@@ -22,6 +22,9 @@
 #               para que a convergência amostre a fase do laço de 10 s.
 #  E5           (exige topo_triplo.py — pendência D9; não implementado)
 #
+#  O fundo (iperf3 -t CARGA) começa ~1 s após CARGA_ON e o servidor ainda drena a fila de r1 ao fim:
+#  por isso 'fimfundo' só roda 6 s após CARGA_OFF (senão a perda do fundo sai inflada).
+#  Cada rep grava drops.tsv (descartes de fila tc em r1/r2 nos marcadores INI/CARGA_ON/CARGA_OFF/FIM).
 #  Variáveis: FUNDO_TAXA(8.5M) SEMENTE(20261018) TE_METRICA TE_JANELA_S WARMUP CARGA RELAX CARGA_NO CARGA_PCT CARGA_PIN TAXA HISTERESE_N TE_* DATA_EXP
 #             TAG (nome da pasta de saída; padrão = ID do cenário)
 #  Saída: relatorios/<data>/experimentos/<ID>/rep<N>/  (+ INVALIDA se reprovar)
@@ -62,15 +65,20 @@ for REP in $(seq 1 "$REPS"); do
         OFF=$(python3 -c "import random; random.seed(${SEMENTE:-20261018}+$REP); print(round(random.uniform(0,10),1))")
         echo "$OFF" > "$R/offset_carga_s.txt"
         BLOCO_CARGA="sh echo \"\$(date +%s.%N) CARGA_ON\" >> $MARC
+drops CARGA_ON $R/drops.tsv
 fundo $CARGA ${FUNDO_TAXA:-8.5M} $R/iperf_fundo_cliente.json $R/iperf_fundo_servidor.json
 sh sleep $CARGA
 sh echo \"\$(date +%s.%N) CARGA_OFF\" >> $MARC
+drops CARGA_OFF $R/drops.tsv
+sh sleep 6
 fimfundo"
     elif [ "$COM_CARGA" -eq 1 ]; then
         BLOCO_CARGA="sh echo \"\$(date +%s.%N) CARGA_ON\" >> $MARC
+drops CARGA_ON $R/drops.tsv
 carga $CARGA_NO $CARGA_PCT ${CARGA_PIN:+pin}
 sh sleep $CARGA
 sh echo \"\$(date +%s.%N) CARGA_OFF\" >> $MARC
+drops CARGA_OFF $R/drops.tsv
 descarga $CARGA_NO"
     else
         BLOCO_CARGA="sh sleep $CARGA"
@@ -81,6 +89,7 @@ descarga $CARGA_NO"
     python3 "$TOPO" --porta-controlador 6653 --modo "$MODO_TOPO" <<CLI > "$R/sessao.log" 2>&1
 sh echo "\$(date +%s.%N) WARMUP_INICIO" >> $MARC
 contadores
+drops INI $R/drops.tsv
 fluxo $TOTAL $R/iperf_cliente.json $TAXA $R/iperf_servidor.json
 rtt $TOTAL $R/ping.txt
 sh sleep $WARMUP
@@ -89,6 +98,7 @@ $BLOCO_CARGA
 sh sleep $RELAX
 sh echo "\$(date +%s.%N) FIM_TRAFEGO" >> $MARC
 sh sleep 4
+drops FIM $R/drops.tsv
 contadores
 politica
 fim

@@ -113,15 +113,98 @@ def ctrl_csv(rep):
         return []
 
 
-def eventos_controle(linhas, mk):
-    """tempo de convergência, nº de trocas, reversão."""
+def eventos_controle(linhas, mk, no_carga="r1"):
+    """nº de trocas, convergência, reversão e decisões erradas.
+
+    convergência = 1ª troca após CARGA_ON que TIRA o fluxo do nó saturado
+    (no_carga); None se o fluxo já estava fora dele ao ligar a carga.
+    trocas_para_no_carga = trocas após CARGA_ON que levam o fluxo PARA o nó
+    saturado (decisões erradas). reversão = 1ª troca após CARGA_OFF."""
     on, off = mk.get("CARGA_ON"), mk.get("CARGA_OFF")
-    troc = [float(l["t_epoch"]) for l in linhas if l["trocou"] == "1"]
-    conv = next((t - on for t in troc if on is not None and t >= on), None)
-    rev = next((t - off for t in troc if off is not None and t >= off), None)
+    troc = [(float(l["t_epoch"]), l["escolhido"]) for l in linhas if l["trocou"] == "1"]
+    antes = [l["escolhido"] for l in linhas if on is not None and float(l["t_epoch"]) < on]
+    estava_no = bool(antes) and antes[-1] == no_carga
+    conv = None
+    if on is not None and estava_no:
+        conv = next((t - on for t, e in troc if t >= on and e != no_carga), None)
+    rev = next((t - off for t, _ in troc if off is not None and t >= off), None)
+    erradas = sum(1 for t, e in troc if on is not None and t >= on and e == no_carga
+                  and (off is None or t < off))
     return {"n_trocas": len(troc), "convergencia_s": conv, "reversao_s": rev,
+            "trocas_para_no_carga": erradas,
             "caminho_inicial": linhas[0]["escolhido"] if linhas else None,
             "caminho_final": linhas[-1]["escolhido"] if linhas else None}
+
+
+def exposicao_s(rep, mk, no_carga="r1"):
+    """Segundos, dentro de [CARGA_ON, CARGA_OFF), com o fluxo TE instalado no nó
+    saturado (coluna 'instalado' do timeline.tsv, 1 amostra/s). None se a coluna
+    não identifica o caminho (ex.: controle estático) ou não há janela."""
+    on, off = mk.get("CARGA_ON"), mk.get("CARGA_OFF")
+    if on is None or off is None:
+        return None
+    pts = []
+    try:
+        with open(os.path.join(rep, "timeline.tsv")) as fp:
+            for r in csv.DictReader(fp, delimiter="\t"):
+                pts.append((float(r["t_epoch"]), r["instalado"]))
+    except (OSError, ValueError, KeyError):
+        return None
+    jan = [(t, i) for t, i in pts if on <= t < off]
+    if len(jan) < 2 or all(i not in ("r1", "r2") for _, i in jan):
+        return None
+    return sum(b[0] - a[0] for a, b in zip(jan, jan[1:]) if a[1] == no_carga)
+
+
+def _totais_iperf(rep, cli, srv):
+    """(enviados, recebidos) de um par de JSON iperf3 UDP; None se faltar."""
+    c, v = _json(os.path.join(rep, cli)), _json(os.path.join(rep, srv))
+    try:
+        env = c["end"]["sum"]["packets"]
+        s = v["end"]["sum"]
+        return env, s["packets"] - s["lost_packets"]
+    except (TypeError, KeyError):
+        return None
+
+
+def descartes_tc(rep, mk):
+    """Descartes de fila (tc -s qdisc) em r1/r2 por fase, a partir de drops.tsv
+    (deltas entre marcadores INI, CARGA_ON, CARGA_OFF, FIM). {} se não houver."""
+    snaps = {}
+    try:
+        for ln in open(os.path.join(rep, "drops.tsv")):
+            f = ln.split()
+            if len(f) == 8:
+                snaps.setdefault(f[1], {})[(f[2], f[3], f[4])] = int(f[6])
+    except OSError:
+        return {}
+    ordem = [("warmup", "INI", "CARGA_ON"), ("carga", "CARGA_ON", "CARGA_OFF"),
+             ("relax", "CARGA_OFF", "FIM"), ("total", "INI", "FIM")]
+    out = {}
+    for fase, a, b in ordem:
+        if a in snaps and b in snaps:
+            d = {}
+            for k, v in snaps[b].items():
+                d[k[0]] = d.get(k[0], 0) + max(v - snaps[a].get(k, 0), 0)
+            out[fase] = {"r1": d.get("r1", 0), "r2": d.get("r2", 0), "total": sum(d.values())}
+    return out
+
+
+def perdas(rep, mk):
+    """Pacotes enviados/perdidos nos fluxos (TE e fundo) e descartes de fila.
+    Perda = enviados (cliente) − recebidos (servidor): imune à reordenação que
+    faz o iperf3 contar perdas negativas por intervalo."""
+    te = _totais_iperf(rep, "iperf_cliente.json", "iperf_servidor.json")
+    fu = _totais_iperf(rep, "iperf_fundo_cliente.json", "iperf_fundo_servidor.json")
+    out = {"te_env": te[0] if te else None, "te_perd": (te[0] - te[1]) if te else None,
+           "fundo_env": fu[0] if fu else None, "fundo_perd": (fu[0] - fu[1]) if fu else None}
+    env = [x for x in (out["te_env"], out["fundo_env"]) if x is not None]
+    per = [x for x in (out["te_perd"], out["fundo_perd"]) if x is not None]
+    out["total_env"] = sum(env) if env else None
+    out["total_perd"] = sum(per) if per else None
+    out["total_perd_pct"] = (100.0 * sum(per) / sum(env)) if env and sum(env) else None
+    out["tc"] = descartes_tc(rep, mk)
+    return out
 
 
 def contadores_end(rep):
@@ -182,7 +265,8 @@ def valida(rep, comcarga, cenario):
 
     fases = _fases(mk, comcarga)
     met = {"fases": {k: metricas_fase(ivs, pts, j) for k, j in fases.items()},
-           "controle": eventos_controle(linhas, mk), "end_delta": ends,
+           "controle": eventos_controle(linhas, mk, no_carga), "end_delta": ends,
+           "exposicao_s": exposicao_s(rep, mk, no_carga), "perdas": perdas(rep, mk),
            "rtt_pacotes_enviados": enviados, "rtt_pacotes_recebidos": len(pts),
            "pico_util_pct": pico_util, "pico_cpu_pct": pico_cpu}
     # Janelas em torno da 1ª troca (V-D): o fluxo TE sofre a saturação até o
@@ -210,9 +294,14 @@ def valida(rep, comcarga, cenario):
     for f, m in met["fases"].items():
         print("  fase %-7s vazão=%s perda=%s%% jitter=%s ms rtt=%s ms" % (
             f, _f(m["vazao_mbps"]), _f(m["perda_pct"]), _f(m["jitter_ms"]), _f(m["rtt_ms_med"])))
+    pd = met["perdas"]
+    print("  perdas: fluxo TE %s/%s  fundo %s/%s  total %s pkts (%s%%)  descartes tc carga=%s total=%s  exposição no nó saturado=%s s" % (
+        pd["te_perd"], pd["te_env"], pd["fundo_perd"], pd["fundo_env"], pd["total_perd"],
+        _f(pd["total_perd_pct"]), pd["tc"].get("carga", {}).get("total"),
+        pd["tc"].get("total", {}).get("total"), _f(met["exposicao_s"])))
     c = met["controle"]
-    print("  controle: trocas=%s convergência=%s s reversão=%s s  %s -> %s" % (
-        c["n_trocas"], _f(c["convergencia_s"]), _f(c["reversao_s"]), c["caminho_inicial"], c["caminho_final"]))
+    print("  controle: trocas=%s convergência=%s s reversão=%s s  %s -> %s  trocas_para_no_carga=%s" % (
+        c["n_trocas"], _f(c["convergencia_s"]), _f(c["reversao_s"]), c["caminho_inicial"], c["caminho_final"], c["trocas_para_no_carga"]))
 
 
 def _f(x):
@@ -247,8 +336,20 @@ def resumo_cenario(base):
             a = agrega([m["fases"][f][campo] for m in val if f in m["fases"]])
             if a:
                 print("  %-7s %-11s %.3f ± %.3f (n=%d)" % (f, campo, a["media"], a["dp"], a["n"]))
-    for campo in ("n_trocas", "convergencia_s", "reversao_s"):
-        a = agrega([m["controle"][campo] for m in val])
+    for nome, ext in (("perda_total_pkts", lambda m: m["perdas"]["total_perd"]),
+                      ("perda_total_pct", lambda m: m["perdas"]["total_perd_pct"]),
+                      ("perda_fluxo_TE_pkts", lambda m: m["perdas"]["te_perd"]),
+                      ("descartes_tc_carga", lambda m: m["perdas"]["tc"].get("carga", {}).get("total")),
+                      ("descartes_tc_total", lambda m: m["perdas"]["tc"].get("total", {}).get("total")),
+                      ("exposicao_s", lambda m: m.get("exposicao_s"))):
+        try:
+            a = agrega([ext(m) for m in val])
+        except (KeyError, TypeError):
+            a = None
+        if a:
+            print("  geral    %-19s %.3f ± %.3f (n=%d)" % (nome, a["media"], a["dp"], a["n"]))
+    for campo in ("n_trocas", "convergencia_s", "reversao_s", "trocas_para_no_carga"):
+        a = agrega([m["controle"].get(campo) for m in val])
         if a:
             print("  controle %-15s %.3f ± %.3f (n=%d)" % (campo, a["media"], a["dp"], a["n"]))
 

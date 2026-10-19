@@ -75,7 +75,8 @@ SID = {"r1": "2001:db8:1::1", "r2": "2001:db8:2::1"}
 # portanto cada travessia custa este valor. Caminho = 2 enlaces, ida e volta:
 #   RTT esperado = 4 x atraso  ->  r1 = 20 ms, r2 = 40 ms
 ATRASO_MS = {"r1": 5, "r2": 10}
-BANDA_MBIT = 10                  # TCC, Seção 3.4.2
+# TCC, Seção 3.4.2 (10 Mbit/s). TE_BANDA_MBIT escala a banda por limitação da VM (2 vCPU).
+BANDA_MBIT = float(os.environ.get("TE_BANDA_MBIT", 10))
 
 def rtt_esperado(via):
     return 4.0 * ATRASO_MS[via]
@@ -934,6 +935,31 @@ class CLIDiamante(CLI):
         "Contadores da função End nos dois nós de trânsito"
         for n in ("r1", "r2"):
             print("%s: %d pacotes" % (n, _contador_end(self.mn, n)))
+
+    def do_drops(self, linha):
+        ("drops TAG ARQUIVO  — anexa em ARQUIVO os descartes das filas (tc -s qdisc) de r1 e r2: "
+         "'epoch TAG no dev tipo pacotes_enviados descartados overlimits'. Medida direta de "
+         "pacotes perdidos por saturação do enlace, independente do iperf3.")
+        p = linha.split()
+        if len(p) < 2:
+            print("uso: drops TAG ARQUIVO")
+            return
+        tag, arq = p[0], p[1]
+        agora = time.time()
+        linhas = []
+        for n in ("r1", "r2"):
+            dev = tipo = None
+            for ln in self.mn.get(n).cmd("tc -s qdisc show").splitlines():
+                m = re.match(r"qdisc (\S+) \S+ dev (\S+)", ln)
+                if m:
+                    tipo, dev = m.group(1), m.group(2)
+                    continue
+                m = re.search(r"Sent \d+ bytes (\d+) pkt \(dropped (\d+), overlimits (\d+)", ln)
+                if m and dev:
+                    linhas.append("%.3f %s %s %s %s %s %s %s" % ((agora, tag, n, dev, tipo) + m.groups()))
+        with open(arq, "a") as fp:
+            fp.write("\n".join(linhas) + "\n")
+        print("drops %s: %d qdiscs -> %s" % (tag, len(linhas), arq))
 
     def do_rotas(self, _l):
         "Tabelas de rotas IPv6 de todos os nós"

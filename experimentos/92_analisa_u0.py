@@ -27,7 +27,7 @@ import statistics as st
 import struct
 import sys
 
-BANDA_MBIT = 10.0
+BANDA_MBIT = float(os.environ.get("TE_BANDA_MBIT", 10))
 TOL_ERRO_PCT = 5.0
 TOL_FATOR_PCT = 5.0
 TOL_RAZAO_PP = 2.0
