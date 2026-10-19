@@ -99,6 +99,13 @@ TE_METRICA = os.environ.get("TE_METRICA", "util")
 METRICAS_VALIDAS = ("util", "cpu")
 TE_JANELA = max(int(os.environ.get("TE_JANELA_S", 3)), 1)
 
+# Margem de decisão (v2): um caminho só substitui o instalado se for mais
+# barato por MAIS que esta diferença de custo (0,05 = 5 pontos percentuais de
+# saturação). Sem ela, o ruído de utilização em repouso (centésimos de %,
+# NDP/ARP/ping) decidia o Dijkstra e o controlador oscilava r1<->r2 sem
+# tráfego. Λ (1000) ultrapassa a margem com folga.
+TE_MARGEM = float(os.environ.get("TE_MARGEM", 0.05))
+
 # Porta do coletor TCP de telemetria (Seção 3.8). Confirmado livre neste
 # laboratório: REST usa 8080, OpenFlow 6653, iperf3 5201.
 PORTA_TELEMETRIA = 9999
@@ -342,7 +349,7 @@ class SRv6TEController(app_manager.RyuApp):
         man = man or self._manifesto()
         g = self._grafo(man)
         transitos = man["grafo"]["transito"]
-        melhor = None
+        cand = []                    # (custo, caminho, t, carga bruta)
         for t in transitos:
             outros = [n for n in transitos if n != t]
             gt = g.copy()
@@ -352,16 +359,20 @@ class SRv6TEController(app_manager.RyuApp):
                 caminho = nx.dijkstra_path(gt, "h1", "h2", weight="weight")
             except nx.NetworkXNoPath:
                 continue
-            carga = self._peso_no(t)
-            # Empate de custo (ex.: os dois trânsitos acima de τ, peso Λ):
-            # vence o de menor saturação bruta; persistindo o empate, a ordem
-            # de man["grafo"]["transito"].
-            if (melhor is None or custo < melhor[0] - 1e-9
-                    or (abs(custo - melhor[0]) <= 1e-9 and carga < melhor[3] - 1e-9)):
-                melhor = (custo, caminho, t, carga)
-        if melhor is None:
+            cand.append((custo, caminho, t, self._peso_no(t)))
+        if not cand:
             return {"escolhido": None, "caminho": [], "custo": None}
-        return {"escolhido": melhor[2], "caminho": melhor[1], "custo": melhor[0]}
+        melhor_custo = min(c[0] for c in cand)
+        # dentro da margem os custos são tratados como iguais
+        empate = [c for c in cand if c[0] <= melhor_custo + TE_MARGEM + 1e-9]
+        atual = (getattr(self, "ultima_decisao", None) or {}).get("escolhido")
+        escolha = next((c for c in empate if c[2] == atual), None)     # estabilidade
+        if escolha is None:
+            if melhor_custo >= PENALIDADE_LAMBDA:       # todos saturados: menor saturação
+                escolha = min(empate, key=lambda c: (c[3], transitos.index(c[2])))
+            else:                                       # ocioso: ordem de man["grafo"]["transito"]
+                escolha = min(empate, key=lambda c: transitos.index(c[2]))
+        return {"escolhido": escolha[2], "caminho": escolha[1], "custo": escolha[0]}
 
     # ===================================================================== #
     # CANAL 2 — instalação fora de banda (A COSTURA COM O EMULADOR)
@@ -556,6 +567,7 @@ class SRv6RestAPI(ControllerBase):
                        "intervalo_recalculo_s": INTERVALO_RECALCULO_S,
                        "modo": TE_MODO, "histerese_n": HISTERESE_N,
                        "metrica": TE_METRICA, "janela_amostras": TE_JANELA,
+                       "margem_decisao": TE_MARGEM,
                        "tau_inf_pct": LIMIAR_TAU_INF_PCT,
                        "telemetria_ttl_s": TELEMETRIA_TTL_S},
             "saturado_histerese": self.app.saturado,
