@@ -1,0 +1,23 @@
+# Somente código é versionado. Relatórios, evidências e ambiente ficam de fora.
+
+# Relatórios e documentos de entendimento do projeto
+relatorios/
+RELATORIO-*.md
+relatorio*.html
+srv6-lab/README.md
+
+# Evidências e saídas de execução (geradas pelos scripts)
+capturas/
+output_*.txt
+*.pcap
+*.log
+
+# Ambiente e artefatos
+ryu-venv
+*.zip
+__pycache__/
+*.pyc
+
+# arquivo da v1 é versionado de propósito
+!arquivo-v1/
+!arquivo-v1/*
