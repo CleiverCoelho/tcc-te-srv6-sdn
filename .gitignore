@@ -24,3 +24,35 @@ __pycache__/
 
 # Documento de estado e handoff (local, não versionado)
 ESTADO-E-PROXIMOS-PASSOS.md
+
+# Material não usado na versão final do texto (local, não versionado)
+arquivo-v1/
+experimentos/01_rodada_eq31.sh
+experimentos/20_x1_histerese.sh
+experimentos/21_x2_sensibilidade.sh
+experimentos/22_x3_custo_srh_n.sh
+experimentos/23_x4_contencao_vm.sh
+experimentos/24_x5_overhead_telemetria.sh
+experimentos/30_v1_agente_no_ns.sh
+experimentos/31_v2_cmd_popen.sh
+experimentos/32_v3_perda_telemetria.sh
+experimentos/33_v4_hosts_cpu.sh
+experimentos/50_relatorio_u0.sh
+experimentos/51_relatorio_cenarios.sh
+experimentos/59_relatorio_geral.sh
+experimentos/60_diag_iperf.sh
+experimentos/90_consolida.py
+experimentos/91_relevancia.py
+experimentos/93_relatorio_cenarios.py
+experimentos/99_roda_tudo.sh
+experimentos/lib/cpu_agentes.py
+experimentos/lib/v2_cmd_popen.py
+ryu_apps/learning_switch_13_debug.py
+srv6-lab/poc-diamante/rodada2_eq31.sh
+srv6-lab/poc-diamante/valida_nucleo_te.sh
+srv6-lab/poc-diamante/roda_tudo.sh
+srv6-lab/poc-diamante/preflight.sh
+srv6-lab/recertifica_f0.sh
+srv6-lab/topo_srv6.py
+srv6-lab/valida_limitacao_ovs.sh
+srv6-lab/verifica.sh
