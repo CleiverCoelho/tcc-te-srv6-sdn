@@ -21,3 +21,6 @@ __pycache__/
 # arquivo da v1 é versionado de propósito
 !arquivo-v1/
 !arquivo-v1/*
+
+# Documento de estado e handoff (local, não versionado)
+ESTADO-E-PROXIMOS-PASSOS.md
