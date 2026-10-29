@@ -59,6 +59,7 @@ for REP in $(seq 1 "$REPS"); do
     limpa; meta "$R"
     sobe_ctrl "$R" "$APP" || { echo "RYU falhou"; continue; }
     [ "$ID" = "E1" ] || sobe_poll "$R"
+    sobe_lag "$R"
 
     OFF=0
     if [ "${CARGA_TIPO:-cpu}" = "trafego" ]; then

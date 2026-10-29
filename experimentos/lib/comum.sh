@@ -49,7 +49,11 @@ sobe_ctrl() {
 
 sobe_poll() { python3 "$APOIO" poll http://127.0.0.1:8080/srv6/estado 1 > "$1/timeline.tsv" 2>"$1/poll.err" & POLL_PID=$!; }
 
+# sobe_lag DIR  — sonda de travadas da VM (lag.txt: epoch e atraso em ms de cada sleep(10 ms) > 100 ms)
+sobe_lag() { python3 -I "$EXP/lib/sonda_lag.py" > "$1/lag.txt" 2>&1 & LAG_PID=$!; }
+
 para_tudo() {
+    kill "${LAG_PID:-0}" 2>/dev/null; wait "${LAG_PID:-0}" 2>/dev/null
     kill "${POLL_PID:-0}" 2>/dev/null; wait "${POLL_PID:-0}" 2>/dev/null
     kill "${RYU_PID:-0}" 2>/dev/null;  wait "${RYU_PID:-0}" 2>/dev/null
     limpa

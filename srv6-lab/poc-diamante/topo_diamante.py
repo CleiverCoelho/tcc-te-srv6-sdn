@@ -937,7 +937,7 @@ class CLIDiamante(CLI):
             print("%s: %d pacotes" % (n, _contador_end(self.mn, n)))
 
     def do_drops(self, linha):
-        ("drops TAG ARQUIVO  — anexa em ARQUIVO os descartes das filas (tc -s qdisc) de r1 e r2: "
+        ("drops TAG ARQUIVO  — anexa em ARQUIVO os descartes das filas (tc -s qdisc) de r1, r2 e das portas de s1 e s2: "
          "'epoch TAG no dev tipo pacotes_enviados descartados overlimits'. Medida direta de "
          "pacotes perdidos por saturação do enlace, independente do iperf3.")
         p = linha.split()
@@ -947,12 +947,16 @@ class CLIDiamante(CLI):
         tag, arq = p[0], p[1]
         agora = time.time()
         linhas = []
-        for n in ("r1", "r2"):
+        # r1/r2 têm namespace próprio; s1/s2 (OVS) estão no namespace raiz, onde o tc
+        # lista todas as interfaces da VM: só as portas "<sw>-eth*" do próprio switch contam.
+        for n in ("r1", "r2", "s1", "s2"):
             dev = tipo = None
             for ln in self.mn.get(n).cmd("tc -s qdisc show").splitlines():
                 m = re.match(r"qdisc (\S+) \S+ dev (\S+)", ln)
                 if m:
                     tipo, dev = m.group(1), m.group(2)
+                    if n in ("s1", "s2") and not dev.startswith(n + "-eth"):
+                        dev = None
                     continue
                 m = re.search(r"Sent \d+ bytes (\d+) pkt \(dropped (\d+), overlimits (\d+)", ln)
                 if m and dev:

@@ -168,8 +168,9 @@ def _totais_iperf(rep, cli, srv):
 
 
 def descartes_tc(rep, mk):
-    """Descartes de fila (tc -s qdisc) em r1/r2 por fase, a partir de drops.tsv
-    (deltas entre marcadores INI, CARGA_ON, CARGA_OFF, FIM). {} se não houver."""
+    """Descartes de fila (tc -s qdisc) em r1, r2 e nas portas de s1/s2 por fase, a
+    partir de drops.tsv (deltas entre marcadores INI, CARGA_ON, CARGA_OFF, FIM).
+    {} se não houver. Corridas antigas só trazem r1/r2 (s1/s2 ficam em 0)."""
     snaps = {}
     try:
         for ln in open(os.path.join(rep, "drops.tsv")):
@@ -183,11 +184,46 @@ def descartes_tc(rep, mk):
     out = {}
     for fase, a, b in ordem:
         if a in snaps and b in snaps:
-            d = {}
+            # O htb raiz e o netem filho de uma mesma porta repetem o mesmo descarte (cada
+            # pacote perdido aparece nos dois): por porta vale o MAIOR contador, não a soma
+            # (validado em 19/10: tc = 2 × perda do iperf3 quando somado).
+            por_dev = {}
             for k, v in snaps[b].items():
-                d[k[0]] = d.get(k[0], 0) + max(v - snaps[a].get(k, 0), 0)
-            out[fase] = {"r1": d.get("r1", 0), "r2": d.get("r2", 0), "total": sum(d.values())}
+                dv = max(v - snaps[a].get(k, 0), 0)
+                por_dev[(k[0], k[1])] = max(por_dev.get((k[0], k[1]), 0), dv)
+            d = {}
+            for (no, _dev), dv in por_dev.items():
+                d[no] = d.get(no, 0) + dv
+            out[fase] = {n: d.get(n, 0) for n in ("r1", "r2", "s1", "s2")}
+            out[fase]["total"] = sum(d.values())
     return out
+
+
+LIMIAR_TRAVADA_MS = 500
+
+
+def travadas(rep, mk):
+    """Travadas da VM na janela de carga, a partir de lag.txt (sonda de sleep(10 ms),
+    'epoch atraso_ms'). A repetição é MARCADA (travada_vm) se algum atraso passar de
+    LIMIAR_TRAVADA_MS; nada é descartado aqui. None se não houve sonda."""
+    ini = mk.get("CARGA_ON", mk.get("WARMUP_INICIO"))
+    fim = mk.get("CARGA_OFF", mk.get("FIM_TRAFEGO"))
+    try:
+        linhas = open(os.path.join(rep, "lag.txt")).read().split("\n")
+    except OSError:
+        return None
+    atrasos = []
+    for ln in linhas:
+        f = ln.split()
+        if len(f) == 2:
+            try:
+                t, g = float(f[0]), float(f[1])
+            except ValueError:
+                continue
+            if ini is not None and fim is not None and ini <= t <= fim:
+                atrasos.append(g)
+    mx = max(atrasos) if atrasos else 0.0
+    return {"lag_max_carga_ms": mx, "episodios_carga": len(atrasos), "travada_vm": mx > LIMIAR_TRAVADA_MS}
 
 
 def perdas(rep, mk):
@@ -267,6 +303,7 @@ def valida(rep, comcarga, cenario):
     met = {"fases": {k: metricas_fase(ivs, pts, j) for k, j in fases.items()},
            "controle": eventos_controle(linhas, mk, no_carga), "end_delta": ends,
            "exposicao_s": exposicao_s(rep, mk, no_carga), "perdas": perdas(rep, mk),
+           "lag": travadas(rep, mk),
            "rtt_pacotes_enviados": enviados, "rtt_pacotes_recebidos": len(pts),
            "pico_util_pct": pico_util, "pico_cpu_pct": pico_cpu}
     # Janelas em torno da 1ª troca (V-D): o fluxo TE sofre a saturação até o
@@ -295,10 +332,18 @@ def valida(rep, comcarga, cenario):
         print("  fase %-7s vazão=%s perda=%s%% jitter=%s ms rtt=%s ms" % (
             f, _f(m["vazao_mbps"]), _f(m["perda_pct"]), _f(m["jitter_ms"]), _f(m["rtt_ms_med"])))
     pd = met["perdas"]
-    print("  perdas: fluxo TE %s/%s  fundo %s/%s  total %s pkts (%s%%)  descartes tc carga=%s total=%s  exposição no nó saturado=%s s" % (
+    tc = pd["tc"].get("carga", {})
+    print("  perdas: fluxo TE %s/%s  fundo %s/%s  total %s pkts (%s%%)  exposição no nó saturado=%s s" % (
         pd["te_perd"], pd["te_env"], pd["fundo_perd"], pd["fundo_env"], pd["total_perd"],
-        _f(pd["total_perd_pct"]), pd["tc"].get("carga", {}).get("total"),
-        pd["tc"].get("total", {}).get("total"), _f(met["exposicao_s"])))
+        _f(pd["total_perd_pct"]), _f(met["exposicao_s"])))
+    print("  descartes tc na carga: %s  (total da corrida: %s)" % (
+        {n: tc.get(n) for n in ("r1", "r2", "s1", "s2")} if tc else "sem drops.tsv",
+        pd["tc"].get("total", {}).get("total")))
+    lg = met["lag"]
+    if lg:
+        print("  VM: maior atraso de sleep na carga=%.0f ms (%d episódios) %s" % (
+            lg["lag_max_carga_ms"], lg["episodios_carga"],
+            "-> repetição MARCADA (travada_vm)" if lg["travada_vm"] else "(sem travada > %d ms)" % LIMIAR_TRAVADA_MS))
     c = met["controle"]
     print("  controle: trocas=%s convergência=%s s reversão=%s s  %s -> %s  trocas_para_no_carga=%s" % (
         c["n_trocas"], _f(c["convergencia_s"]), _f(c["reversao_s"]), c["caminho_inicial"], c["caminho_final"], c["trocas_para_no_carga"]))
@@ -352,6 +397,18 @@ def resumo_cenario(base):
         a = agrega([m["controle"].get(campo) for m in val])
         if a:
             print("  controle %-15s %.3f ± %.3f (n=%d)" % (campo, a["media"], a["dp"], a["n"]))
+    marc = [d for d, m in reps if m and m.get("valida") and (m.get("lag") or {}).get("travada_vm")]
+    print("  repetições marcadas por travada da VM (> %d ms na carga): %s" % (LIMIAR_TRAVADA_MS, marc or "nenhuma"))
+    if marc:
+        lim = [m for d, m in reps if m and m.get("valida") and d not in marc]
+        for nome, ext in (("perda_total_pkts", lambda m: m["perdas"]["total_perd"]),
+                          ("rtt_carga_ms", lambda m: m["fases"]["carga"]["rtt_ms_med"])):
+            try:
+                a = agrega([ext(m) for m in lim])
+            except (KeyError, TypeError):
+                a = None
+            if a:
+                print("  sem marcadas %-18s %.3f ± %.3f (n=%d)" % (nome, a["media"], a["dp"], a["n"]))
 
 
 def pcap_bytes(caminho):
